@@ -1,3 +1,44 @@
+# Force a short run for profiling - added 
+
+add_definitions(-DMINI_PROFILE)
+
+
+project(Peridynamics)
+# Require C++17
+
+set(CMAKE_CXX_STANDARD        17)
+
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+set(CMAKE_CXX_EXTENSIONS       OFF)
+
+
+
+#-------------------------------------------------------------------------------
+
+# Compiler flags for profiling & optimization
+
+#-------------------------------------------------------------------------------
+# For gprof profiling:
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g -pg")
+# Later, for production builds you can switch to:
+
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=znver2 -funroll-loops -ffast-math -DNDEBUG")
+
+
+# If you add OpenMP later:
+
+find_package(OpenMP)
+
+if(OpenMP_CXX_FOUND)
+
+   message(STATUS "Enabling OpenMP")
+
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+
+endif()
+
 # ---------------------------------------------------------------------
 #  User‑installed libraries (GKlib, METIS, ParMETIS)
 # ---------------------------------------------------------------------
@@ -41,4 +82,6 @@ target_link_libraries(2D_Hassa_test
     ${METIS_LIB}
     ${GKLIB_LIB}
     MPI::MPI_CXX
+    -pg
 )
+

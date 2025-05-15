@@ -10,7 +10,38 @@ void applyDispBC(int ndim, vector<int>& boundarySet, vector<long double>& dispBC
 void applyFixedBC(int ndim, vector<int>& boundarySet, vector<Particle>& localParticles);
 void buildLocalNeighborlist(int rank, int ndim, double dx, double horizon, vector<Particle>& localParticles, vector<Particle>& ghostParticles, const unordered_map<int, int>& globalLocalIDmap, const map<int, int>& globalPartitionIDmap, 
                             const unordered_map<int, int>& globalGhostIDmap, vector<vector<Particle*>>& Neighborslist);
-vector<matrix> computeShapeTensors(int ndim, double n1, double n2, double dx, double horizon, const vector<Particle*>& piNeighbors, Particle& pi, Particle& pj);
+//vector<matrix> computeShapeTensors(int ndim, double n1, double n2, double dx, double horizon, const vector<Particle*>& piNeighbors, Particle& pi, Particle& pj);
+// New:
+
+struct ShapePair {
+
+  double K00, K01, K11;
+
+  double L00, L01, L11;
+
+};
+
+
+
+ShapePair computeShapeTensors(
+
+    int ndim,
+
+    double n1,
+
+    double n2,
+
+    double dx,
+
+    double horizon,
+
+    const std::vector<Particle*>& nbrs,
+
+    const Particle& pi,
+
+    const Particle& pj);
+
+
 vector<long double> StrainVector(const matrix& strain);
 matrix getStiffnessTensor(int ndim, double E, double nv);
 matrix computeStressTensor(matrix& shapeRef, matrix& shapeCur, int ndim, matrix& StiffnessTensor, vector<vector<double>>& bondDamage, int piIndex, int pjIndex);

@@ -73,55 +73,117 @@ void buildLocalNeighborlist(int rank, int ndim, double dx, double horizon, vecto
 }
 
 
-vector<matrix> computeShapeTensors(int ndim, double n1, double n2, double dx, double horizon, vector<Particle*>& piNeighbors, Particle& pi, Particle& pj){
-    
-    vector<matrix> shapeTensors = {
-        matrix(ndim, vector<long double>(ndim*ndim, 0.0)),
-        matrix(ndim, vector<long double>(ndim*ndim, 0.0))
-    };
+// Change the signature to return just the 6 numbers you need:
 
-    double length2 = 0.0, lengthNb2;
-    vector<long double> bondIJ(ndim), bondINbcurrent(ndim), bondINb(ndim);
 
-    for (int i = 0; i < ndim; ++i){
-        bondIJ[i] = pj.initialPositions[i] - pi.initialPositions[i];
-        length2 += pow(bondIJ[i], 2);
-    }
+ShapePair computeShapeTensors(
 
-    double length = sqrt(length2);
-    for (const Particle* nb : piNeighbors){
+    int ndim, double n1, double n2, double dx, double horizon,
 
-        lengthNb2 = 0.0;
-        double numerator = 0.0;
+    const vector<Particle*>& nbrs,
 
-        for (int i = 0; i < ndim; ++i){
-            bondINb[i] =  nb->initialPositions[i] - pi.initialPositions[i];
-            bondINbcurrent[i] = nb->currentPositions[i] - pi.currentPositions[i];
-            lengthNb2 += pow(bondINb[i], 2);
-            numerator += bondIJ[i] * bondINb[i];
-        }
+    const Particle& pi, const Particle& pj)
 
-        double lengthNb = sqrt(lengthNb2);
+{
 
-        //calculate the cos angle
+  // 1) build the three entries of K and Kc
 
-        double cosAngle = numerator / (length * lengthNb);
-        if (cosAngle > 1.0) cosAngle = 1.0; else if (cosAngle < -1.0) cosAngle = -1.0;
+  double a=0, b=0, c=0,  // K entries
 
-        double lengthRatio = abs(length - lengthNb) / (horizon * dx);
-        double weight = exp(-n1 * lengthRatio) * pow(0.5 + 0.5 * cosAngle, n2);
+         ac=0, bc=0, cc=0; // Kc entries
 
-        for (int k = 0; k < ndim; ++k){
-            for (int l = 0; l < ndim; ++l){
-                shapeTensors[0].elements[k][l] += weight * bondINb[k] * bondINb[l] * nb->volume;
-                shapeTensors[1].elements[k][l] += weight * bondINbcurrent[k] * bondINb[l] * nb->volume;
-            }
-        }
+  double length2 = 0;
 
-    }
+  for(int i=0; i<ndim; ++i){
 
-    return shapeTensors;
+    double d = pj.initialPositions[i] - pi.initialPositions[i];
+
+    length2 += d*d;
+
+  }
+
+  double length = sqrt(length2);
+
+
+
+  for (auto *nb : nbrs) {
+
+    // compute bonds
+
+    double dx0 = nb->initialPositions[0] - pi.initialPositions[0];
+
+    double dy0 = nb->initialPositions[1] - pi.initialPositions[1];
+
+    double dx1 = nb->currentPositions[0]     - pi.currentPositions[0];
+
+    double dy1 = nb->currentPositions[1]     - pi.currentPositions[1];
+
+
+
+    double lenN2 = dx0*dx0 + dy0*dy0;
+
+    double lenN  = sqrt(lenN2);
+
+    double cost  = ((pj.initialPositions[0]-pi.initialPositions[0])*dx0 + 
+
+                    (pj.initialPositions[1]-pi.initialPositions[1])*dy0) 
+
+                   / (length*lenN);
+
+    cost = std::clamp(cost,-1.0,1.0);
+
+
+
+    double w = exp(-n1*fabs(length-lenN)/(horizon*dx)) 
+
+             * pow(0.5+0.5*cost, n2) * nb->volume;
+
+
+
+    // accumulate K = Σ w * [dx0;dy0]*[dx0 dy0]
+
+    a  += w*dx0*dx0; 
+
+    b  += w*dx0*dy0; 
+
+    c  += w*dy0*dy0;
+
+    // accumulate Kc = Σ w * [dx1;dy1]*[dx0 dy0]
+
+    ac += w*dx1*dx0; 
+
+    bc += w*dx1*dy0; 
+
+    cc += w*dy1*dy0;
+
+  }
+
+
+
+  // 2) 2×2 closed‐form inverse of K
+
+  double det = a*c - b*b;
+
+  double i00 =  c/det, i01 = -b/det;
+
+  double i10 = -b/det, i11 =  a/det;
+
+
+
+  // 3) build L = Kc * Kinv  (only 3 entries needed)
+
+  double L00 = i00*ac + i01*bc;
+
+  double L01 = i10*ac + i11*bc;  // note Kinv is symmetric
+
+  double L11 = i10*bc + i11*cc;
+
+
+
+  return {a,b,c, L00,L01,L11};
+
 }
+
 
 vector<long double> StrainVector(const matrix& strain){
     vector<long double> strainV;
@@ -247,12 +309,58 @@ vector<long double> computeForceDensityStates(int ndim, int rank, double n1, dou
         double lengthRatio = abs(length - lengthNb) / (horizon * dx);
         double weight = exp(-n1 * lengthRatio) * pow(0.5 + 0.5 * cosAngle, n2);
 
-        vector<matrix> shapeTensors = computeShapeTensors(ndim, n1, n2, dx, horizon, piNeighbors, pi, *nb);
+//        vector<matrix> shapeTensors = computeShapeTensors(ndim, n1, n2, dx, horizon, piNeighbors, pi, *nb);
+	ShapePair sp = computeShapeTensors(ndim, n1, n2, dx, horizon, piNeighbors, pi, *nb);
 
-        matrix stress = computeStressTensor(shapeTensors[0], shapeTensors[1], ndim, StiffnessTensor, bondDamage, piIndex, pjIndex);
-        if (pi.partitionID == rank) {pjIndex += 1;}
 
-        Tmatrix = Tmatrix.matrixAdd((stress.timeMatrix(shapeTensors[0].inverse2D())).timeScalar(weight * nb->volume));
+       // matrix stress = computeStressTensor(shapeTensors[0], shapeTensors[1], ndim, StiffnessTensor, bondDamage, piIndex, pjIndex);
+        // Rebuild only the tiny K and L matrices if computeStressTensor needs full matrices:
+	 matrix K(2, { sp.K00, sp.K01, sp.K01, sp.K11 });
+	 matrix L(2, { sp.L00, sp.L01, sp.L01, sp.L11 });
+	 matrix stress = computeStressTensor( K, L, ndim, StiffnessTensor, bondDamage, piIndex, pjIndex);
+	
+	 if (pi.partitionID == rank) {pjIndex += 1;}
+
+ //       Tmatrix = Tmatrix.matrixAdd((stress.timeMatrix(shapeTensors[0].inverse2D())).timeScalar(weight * nb->volume));
+	// Build the tiny inverse of K from sp.K00,K01,K11:
+
+	double det = sp.K00*sp.K11 - sp.K01*sp.K01;
+
+	double i00 =  sp.K11/det, i01 = -sp.K01/det;
+
+	double i10 = -sp.K01/det, i11 =  sp.K00/det;
+
+
+
+	// Now form stress · Kinv without ever constructing a matrix object:
+
+	// stress is 2×2: [s00 s01; s10 s11]
+
+	// Kinv is [i00 i01; i10 i11]
+
+	double F00 = stress.elements[0][0]*i00 + stress.elements[0][1]*i10;
+
+	double F01 = stress.elements[0][0]*i01 + stress.elements[0][1]*i11;
+
+	double F10 = stress.elements[1][0]*i00 + stress.elements[1][1]*i10;
+
+	double F11 = stress.elements[1][0]*i01 + stress.elements[1][1]*i11;
+
+
+
+	// Now scale by weight*volume and add into Tmatrix:
+
+	double scale = weight * nb->volume;
+
+	Tmatrix.elements[0][0] += F00 * scale;
+
+	Tmatrix.elements[0][1] += F01 * scale;
+
+	Tmatrix.elements[1][0] += F10 * scale;
+
+	Tmatrix.elements[1][1] += F11 * scale;
+
+
         horizonVolume += nb->volume;
     }
 
@@ -347,63 +455,96 @@ void computeVelocity(int rank, int ndim, double n1, double n2, double horizon, d
                      const unordered_map<int, int>& globalLocalIDmap, const map<int, int>& globalPartitionIDmap, const unordered_map<int, int>& globalGhostIDmap, vector<vector<double>>& bondDamage){
     
     vector<long double> forceIJ, forceJI;
+ for (int i = 0; i < localParticles.size(); ++i) {
+        Particle& pi = localParticles[i];
+        // grab precomputed neighbor pointers
+        auto& piNeighbors = Neighborslist[i];
 
-    for (int i = 0; i < localParticles.size(); ++i){
-
-        Particle pi = localParticles[i];
-        vector<Particle*>& piNeighbors = Neighborslist[i];
+        // ---------------------------------------------------------
+        // 1) Precompute all shape-tensors (only once per neighbor)
+        // ---------------------------------------------------------
+        vector<ShapePair> bondShapes;
+        bondShapes.reserve(piNeighbors.size());
+        for (size_t idx = 0; idx < piNeighbors.size(); ++idx) {
+            bondShapes[idx] = computeShapeTensors(
+                ndim, n1, n2, dx, horizon,
+                piNeighbors, pi, *piNeighbors[idx]
+            );
+        }
+        
         vector<long double> acceNew(ndim, 0.0);
         
         //compute netForce
         vector<long double> netForce(ndim, 0.0);
 
-        for (Particle* nb : piNeighbors){
-
+        // ---------------------------------------------------------
+        // 2) Single loop: compute force contributions using precomputed shapes
+        // ---------------------------------------------------------
+        for (size_t idx = 0; idx < piNeighbors.size(); ++idx) {
+            Particle* nb = piNeighbors[idx];
+            const ShapePair &sp = bondShapes[idx];
             //build pjNeighbors
-            vector<Particle*> pjNeighbors;
-            if (nb->partitionID == rank){
+            // inline computeForceDensityStates → force density vector f
 
-                int localID = globalLocalIDmap.at(nb->globalID);
-                pjNeighbors = Neighborslist[localID];
+            // 1) compute small inverse of K:
 
-            }else{
-                
-                for (auto& nnb : nb->neighbors){
-                    if (globalPartitionIDmap.at(nnb) == rank){
-                        int localNnbId = globalLocalIDmap.at(nnb);
-                        pjNeighbors.push_back(&localParticles[localNnbId]);
-                    }
-                    else if(globalGhostIDmap.find(nnb) != globalGhostIDmap.end()){
-                        int ghostnnbID = globalGhostIDmap.at(nnb);
-                        pjNeighbors.push_back(&ghostParticles[ghostnnbID]);
-                    }
-                    else{
-                        cout << "Error in build pjNeighbors: cannot find " << nnb << endl;
-                        cout << " pi = " << pi.globalID << " at rank " << rank << endl;
-                        cout << " nb = " << nb->globalID << endl;
-                    }
-                }
-            }
-            
-            // for (auto& nnb : nb->neighbors){
-            //     if (globalPartitionIDmap.at(nnb) == rank){
-            //         int localNnbId = globalLocalIDmap.at(nnb);
-            //         pjNeighbors.push_back(&localParticles[localNnbId]);
-            //     }
-            //     else{
-            //         int ghostnnbID = globalGhostIDmap.at(nnb);
-            //         pjNeighbors.push_back(&ghostParticles[ghostnnbID]);
-            //     }
-            // }
+            double detK = sp.K00*sp.K11 - sp.K01*sp.K01;
 
-            forceIJ = computeForceDensityStates(ndim, rank, n1, n2, horizon, StiffnessTensor, dx, piNeighbors, pi, *nb, globalLocalIDmap, bondDamage);
-            forceJI = computeForceDensityStates(ndim, rank, n1, n2, horizon, StiffnessTensor, dx, pjNeighbors, *nb, pi, globalLocalIDmap, bondDamage);
+            double i00 =  sp.K11/detK, i01 = -sp.K01/detK;
 
-            pjNeighbors.clear();
+            double i10 = -sp.K01/detK, i11 =  sp.K00/detK;
 
-            for (int j = 0; j < ndim; ++j) {
-                netForce[j] += (forceIJ[j] - forceJI[j]) * nb->volume;
-            }
+
+
+            // 2) compute stress tensor once (you can still call your helper)
+
+            matrix K(2, {sp.K00, sp.K01, sp.K01, sp.K11});
+
+            matrix Kc(2, {sp.L00*sp.K00 + sp.L01*sp.K01,
+
+                         sp.L00*sp.K01 + sp.L01*sp.K11,
+
+                         sp.L01*sp.K00 + sp.L11*sp.K01,
+
+                         sp.L01*sp.K01 + sp.L11*sp.K11});
+            matrix stress = computeStressTensor(K, Kc, ndim, StiffnessTensor, bondDamage, i, idx);
+
+
+
+            // 3) multiply stress * Kinv:
+
+            double s00 = stress.elements[0][0], s01 = stress.elements[0][1];
+
+            double s11 = stress.elements[1][1];
+
+            double F00 = s00*i00 + s01*i10;
+
+            double F01 = s00*i01 + s01*i11;
+
+            double F10 = s01*i00 + s11*i10;
+
+            double F11 = s01*i01 + s11*i11;
+
+
+
+            // 4) convert to vector along bond direction:
+
+            double bj0 = nb->initialPositions[0] - pi.initialPositions[0];
+
+            double bj1 = nb->initialPositions[1] - pi.initialPositions[1];
+
+            vector<long double> fIJ(2);
+
+            fIJ[0] = (F00 * bj0 + F01 * bj1) * nb->volume;
+
+            fIJ[1] = (F10 * bj0 + F11 * bj1) * nb->volume;
+
+
+
+            // accumulate into netForce
+
+           netForce[0] += fIJ[0];
+             netForce[1] += fIJ[1];
         }
 
         netF[i] = netForce;
@@ -444,8 +585,14 @@ void computeDamageStatus(int ndim, double n1, double n2, double dx, double horiz
 
         for (Particle* nb : piNeighbors){
             alpha_t = 0.0, alpha_c = 0.0;
-            vector<matrix> shapeTensors = computeShapeTensors(ndim, n1, n2, dx, horizon, piNeighbors, pi, *nb);
-            matrix deformationGradient = shapeTensors[1].timeMatrix(shapeTensors[0].inverse2D());
+         //   vector<matrix> shapeTensors = computeShapeTensors(ndim, n1, n2, dx, horizon, piNeighbors, pi, *nb);
+          //  matrix deformationGradient = shapeTensors[1].timeMatrix(shapeTensors[0].inverse2D());
+       ShapePair sp = computeShapeTensors(ndim, n1, n2, dx, horizon, piNeighbors, pi, *nb);
+	matrix K(2, { sp.K00, sp.K01, sp.K01, sp.K11 });
+	double det = sp.K00*sp.K11 - sp.K01*sp.K01;
+	matrix Kinv(2, { sp.K11/det, -sp.K01/det, -sp.K01/det, sp.K00/det });
+	matrix L(2, { sp.L00, sp.L01, sp.L01, sp.L11 });
+	matrix deformationGradient = L;  // because L == Kc * Kin
 
             matrix Imatrix = matrix(ndim, vector<long double> (ndim*ndim, 0.0));
             for(int i = 0; i < ndim; ++i) {Imatrix.elements[i][i] = 1.0;}

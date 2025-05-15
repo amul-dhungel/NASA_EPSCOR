@@ -16,11 +16,27 @@ using namespace std;
 int main(int argc, char *argv[]){
 
     MPI_Init(&argc, &argv);
+  
 
     int rank, size;
     MPI_Comm comm = MPI_COMM_WORLD;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+    if (rank == 0) {
+        cerr << "[DEBUG] argv:";
+        for (int i = 0; i < argc; ++i) cerr << " " << argv[i];
+        cerr << endl;
+    }
+
+    // Parse --steps N flag to limit iterations
+    long long maxSteps = -1;
+    for (int i = 1; i < argc; ++i) {
+        if (string(argv[i]) == "--steps" && i + 1 < argc) {
+            maxSteps = atoll(argv[i+1]);
+            if (rank == 0) cerr << "[INFO] Limiting to " << maxSteps << " steps" << endl;
+            ++i;
+        }
+    }
 
     vector<Particle> globalParticles;
     vector<Particle> ghostParticles;
@@ -54,7 +70,8 @@ int main(int argc, char *argv[]){
 
     //distribute the boxlimit for determining boundary particles at each processor
     MPI_Bcast(boxlimit.data(), 2*ndim, MPI_LONG_DOUBLE, 0, comm);
-    //if(rank == size - 1) for(int i = 0; i < boxlimit.size(); ++i){ cout << " boxlimit " << i << " : " <<  boxlimit[i] << endl;}
+    
+//if(rank == size - 1) for(int i = 0; i < boxlimit.size(); ++i){ cout << " boxlimit " << i << " : " <<  boxlimit[i] << endl;}
 
     //distribute the vtxdist and send local xadj, adjncy
     MPI_Bcast(vtxdist.data(), size + 1, MPI_INT, 0, comm);
@@ -132,11 +149,25 @@ int main(int argc, char *argv[]){
     //  Mass - Kg
     //  Stress - MPa
 
-    long double totalTime = 1.0e-2, stepSize = 1.0e-9, massDensity = 2.5e-6;
-    long long totalSteps = totalTime / stepSize;
-    long double E = 3.5e4, nv = 0.2, tensileStrength = 3.0;
-    long double damageThreshold = tensileStrength / E;
-    
+ #ifdef MINI_PROFILE
+
+  // ~500 steps total
+
+  long double totalTime = 5e-4;   // 0.0005 s
+  long double stepSize  = 1e-6;   // 0.000001 s
+
+#else
+
+  long double totalTime = 1e-2;
+  long double stepSize  = 1e-9;
+
+#endif
+
+long long totalSteps  = (long long)(totalTime / stepSize);
+long double massDensity  = 2.5e-6;  // restore this!
+long double E = 3.5e4, nv = 0.2, tensileStrength = 3.0;
+long double damageThreshold = tensileStrength / E;
+      
     matrix StiffnessTensor = getStiffnessTensor(ndim, E, nv);
 
     //cout << " totalSteps " << totalSteps << endl;
@@ -153,7 +184,16 @@ int main(int argc, char *argv[]){
     }
 
     for (int j = 0; j < totalSteps; ++j){
+        if (maxSteps >= 0 && j >= maxSteps) {
 
+            if (rank == 0) {
+
+                std::cerr << "[INFO] Reached forced stop at step " << j << "\n";
+
+            }
+
+            break;
+        }
         if(rank==0 && j % 100 == 0){
             cout << "--------time step---------" << j << "--------"<< endl;
         }
